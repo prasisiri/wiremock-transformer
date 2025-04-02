@@ -31,8 +31,8 @@ This guide provides steps to directly deploy WireMock to OpenShift without build
    Create a temporary pod and upload your JAR files:
 
    ```bash
-   # Create a temporary pod
-   oc run jar-uploader --image=registry.access.redhat.com/ubi8/ubi-minimal:latest -- sleep 3600
+   # Create a temporary pod using the UBI standard image (includes tar for oc cp)
+   oc run jar-uploader --image=registry.access.redhat.com/ubi8/ubi:latest -- sleep 3600
    
    # Wait for the pod to be ready
    oc wait --for=condition=Ready pod/jar-uploader
@@ -83,7 +83,7 @@ The deployment configuration (`direct-wiremock-deployment.yaml`) includes:
 
 2. **Deployment**
    - Uses Red Hat UBI 8 OpenJDK 11 container (registry.access.redhat.com/ubi8/openjdk-11)
-   - Uses a Red Hat UBI 8 Minimal init container to copy JAR files
+   - Uses a Red Hat UBI 8 standard container for init container (has tar installed)
    - Mounts the ConfigMap as a volume for stub mappings
    - Runs WireMock with your custom transformer
 

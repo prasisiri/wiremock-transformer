@@ -65,7 +65,7 @@ spec:
           defaultMode: 0755
       initContainers:
       - name: jar-loader
-        image: registry.access.redhat.com/ubi8/ubi-minimal:latest
+        image: registry.access.redhat.com/ubi8/ubi:latest
         command: ["/bin/sh", "/scripts/init.sh"]
         volumeMounts:
         - name: jar-source
