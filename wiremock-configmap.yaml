@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wiremock-stubs
+  labels:
+    app: wiremock
+data:
+  example.json: |
+    {
+      "request": {
+        "method": "GET",
+        "url": "/example"
+      },
+      "response": {
+        "status": 200,
+        "body": "{{request.path.[0]}}",
+        "headers": {
+          "Content-Type": "text/plain"
+        },
+        "transformers": ["response-template", "com.dfs.StringManipulationTransfromer"]
+      }
+    } 

@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wiremock
+  labels:
+    app: wiremock
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wiremock
+  template:
+    metadata:
+      labels:
+        app: wiremock
+    spec:
+      containers:
+      - name: wiremock
+        image: wiremock-custom:latest
+        imagePullPolicy: IfNotPresent
+        args: ["--root-dir", "/opt/wiremock/mappings"]
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "200m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        readinessProbe:
+          httpGet:
+            path: /__admin/
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        volumeMounts:
+        - name: stubs-volume
+          mountPath: /opt/wiremock/mappings
+      volumes:
+      - name: stubs-volume
+        configMap:
+          name: wiremock-stubs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wiremock
+  labels:
+    app: wiremock
+spec:
+  selector:
+    app: wiremock
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http
+  type: ClusterIP
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: wiremock
+  labels:
+    app: wiremock
+spec:
+  to:
+    kind: Service
+    name: wiremock
+  port:
+    targetPort: http 
