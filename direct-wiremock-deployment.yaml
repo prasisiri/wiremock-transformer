@@ -1,0 +1,129 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wiremock-stubs
+  labels:
+    app: wiremock
+data:
+  example.json: |
+    {
+      "request": {
+        "method": "GET",
+        "url": "/example"
+      },
+      "response": {
+        "status": 200,
+        "body": "{{request.path.[0]}}",
+        "headers": {
+          "Content-Type": "text/plain"
+        },
+        "transformers": ["response-template", "com.dfs.StringManipulationTransfromer"]
+      }
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wiremock-init-script
+  labels:
+    app: wiremock
+data:
+  init.sh: |
+    #!/bin/sh
+    # Copy the JAR files to the shared volume
+    cp /tmp/jar-source/wiremock-standalone.jar /opt/wiremock/
+    cp /tmp/jar-source/custom-wiremock-transformer.jar /opt/wiremock/
+    chmod 644 /opt/wiremock/*.jar
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wiremock
+  labels:
+    app: wiremock
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wiremock
+  template:
+    metadata:
+      labels:
+        app: wiremock
+    spec:
+      volumes:
+      - name: jar-source
+        emptyDir: {}
+      - name: wiremock-data
+        emptyDir: {}
+      - name: stubs-volume
+        configMap:
+          name: wiremock-stubs
+      - name: init-script
+        configMap:
+          name: wiremock-init-script
+          defaultMode: 0755
+      initContainers:
+      - name: jar-loader
+        image: busybox:latest
+        command: ["/bin/sh", "/scripts/init.sh"]
+        volumeMounts:
+        - name: jar-source
+          mountPath: /tmp/jar-source
+        - name: wiremock-data
+          mountPath: /opt/wiremock
+        - name: init-script
+          mountPath: /scripts
+      containers:
+      - name: wiremock
+        image: eclipse-temurin:11-jre-focal
+        command: ["java"]
+        args: ["-cp", "/opt/wiremock/wiremock-standalone.jar:/opt/wiremock/custom-wiremock-transformer.jar", "com.github.tomakehurst.wiremock.standalone.WiremockServerRunner", "--extensions", "com.dfs.StringManipulationTransfromer", "--global-response-templating", "--root-dir", "/opt/wiremock/mappings"]
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "200m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        readinessProbe:
+          httpGet:
+            path: /__admin/
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        volumeMounts:
+        - name: wiremock-data
+          mountPath: /opt/wiremock
+        - name: stubs-volume
+          mountPath: /opt/wiremock/mappings
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wiremock
+  labels:
+    app: wiremock
+spec:
+  selector:
+    app: wiremock
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http
+  type: ClusterIP
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: wiremock
+  labels:
+    app: wiremock
+spec:
+  to:
+    kind: Service
+    name: wiremock
+  port:
+    targetPort: http 
