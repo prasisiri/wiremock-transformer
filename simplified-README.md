@@ -10,7 +10,7 @@ This guide provides steps to directly deploy WireMock to OpenShift without build
   - wiremock-standalone.jar
   - custom-wiremock-transformer.jar
 
-## Simplified Deployment Steps
+## Deployment Steps
 
 1. **Login to OpenShift**
 
@@ -18,19 +18,21 @@ This guide provides steps to directly deploy WireMock to OpenShift without build
    oc login
    ```
 
-2. **Create a new project or use an existing one**
+2. **Create a new project or select an existing one**
 
    ```bash
-   oc new-project wiremock-project   # Optional - create a new project
+   oc new-project wiremock-project   # Create a new project
    # OR
    oc project your-existing-project  # Use existing project
    ```
 
-3. **Copy your JAR files to OpenShift**
+3. **Upload JAR files to OpenShift**
+
+   Create a temporary pod and upload your JAR files:
 
    ```bash
-   # Create a temporary pod to upload JAR files
-   oc run jar-uploader --image=busybox -- sleep 3600
+   # Create a temporary pod
+   oc run jar-uploader --image=registry.access.redhat.com/ubi8/ubi-minimal:latest -- sleep 3600
    
    # Wait for the pod to be ready
    oc wait --for=condition=Ready pod/jar-uploader
@@ -38,19 +40,22 @@ This guide provides steps to directly deploy WireMock to OpenShift without build
    # Copy JAR files to the pod
    oc cp wiremock-standalone.jar jar-uploader:/tmp/
    oc cp custom-wiremock-transformer.jar jar-uploader:/tmp/
+   
+   # Verify the files were uploaded correctly
+   oc exec jar-uploader -- ls -lh /tmp/wiremock-standalone.jar /tmp/custom-wiremock-transformer.jar
    ```
 
-4. **Apply the deployment**
+4. **Deploy WireMock to OpenShift**
 
    ```bash
-   # Apply the deployment manifest
+   # Apply the deployment configuration
    oc apply -f direct-wiremock-deployment.yaml
    
-   # Wait for the pod to be ready
+   # Wait for the deployment to be ready
    oc wait --for=condition=Ready pod -l app=wiremock
    ```
 
-5. **Check the deployment**
+5. **Test the deployment**
 
    ```bash
    # Get the route URL
@@ -60,24 +65,56 @@ This guide provides steps to directly deploy WireMock to OpenShift without build
    curl http://$(oc get route wiremock -o jsonpath='{.spec.host}')/example
    ```
 
+6. **Clean up (optional)**
+
+   Once the WireMock deployment is running, you can remove the temporary pod:
+
+   ```bash
+   oc delete pod jar-uploader
+   ```
+
 ## How It Works
 
-This deployment uses:
-1. A standard Java container (eclipse-temurin:11-jre)
-2. An init container to copy the JAR files from a shared volume 
-3. ConfigMaps for stub mappings and initialization scripts
-4. A direct Java command to run WireMock with your custom transformer
+The deployment configuration (`direct-wiremock-deployment.yaml`) includes:
+
+1. **ConfigMaps**
+   - `wiremock-stubs`: Contains example stub mappings
+   - `wiremock-init-script`: Contains the script for copying JAR files
+
+2. **Deployment**
+   - Uses Red Hat UBI 8 OpenJDK 11 container (registry.access.redhat.com/ubi8/openjdk-11)
+   - Uses a Red Hat UBI 8 Minimal init container to copy JAR files
+   - Mounts the ConfigMap as a volume for stub mappings
+   - Runs WireMock with your custom transformer
+
+3. **Service and Route**
+   - Creates a Service to expose WireMock within the cluster
+   - Creates a Route for external access
 
 ## Troubleshooting
 
-Check the logs of the WireMock pod:
+If the deployment is not working as expected:
 
-```bash
-oc logs $(oc get pods -l app=wiremock -o name)
-```
+1. **Check pod status**
 
-If the init container fails, check its logs:
+   ```bash
+   oc get pods -l app=wiremock
+   ```
 
-```bash
-oc logs $(oc get pods -l app=wiremock -o name) -c jar-loader
-``` 
+2. **Check logs of the WireMock container**
+
+   ```bash
+   oc logs $(oc get pods -l app=wiremock -o name) -c wiremock
+   ```
+
+3. **Check logs of the init container**
+
+   ```bash
+   oc logs $(oc get pods -l app=wiremock -o name) -c jar-loader
+   ```
+
+4. **Verify JAR files were copied correctly**
+
+   ```bash
+   oc exec $(oc get pods -l app=wiremock -o name) -- ls -lh /opt/wiremock/
+   ``` 

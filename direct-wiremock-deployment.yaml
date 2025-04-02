@@ -65,7 +65,7 @@ spec:
           defaultMode: 0755
       initContainers:
       - name: jar-loader
-        image: busybox:latest
+        image: registry.access.redhat.com/ubi8/ubi-minimal:latest
         command: ["/bin/sh", "/scripts/init.sh"]
         volumeMounts:
         - name: jar-source
@@ -76,7 +76,7 @@ spec:
           mountPath: /scripts
       containers:
       - name: wiremock
-        image: eclipse-temurin:11-jre-focal
+        image: registry.access.redhat.com/ubi8/openjdk-11:latest
         command: ["java"]
         args: ["-cp", "/opt/wiremock/wiremock-standalone.jar:/opt/wiremock/custom-wiremock-transformer.jar", "com.github.tomakehurst.wiremock.standalone.WiremockServerRunner", "--extensions", "com.dfs.StringManipulationTransfromer", "--global-response-templating", "--root-dir", "/opt/wiremock/mappings"]
         ports:
