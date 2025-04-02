@@ -22,18 +22,17 @@ data:
     }
 ---
 apiVersion: v1
-kind: ConfigMap
+kind: PersistentVolumeClaim
 metadata:
-  name: wiremock-init-script
+  name: wiremock-jars
   labels:
     app: wiremock
-data:
-  init.sh: |
-    #!/bin/sh
-    # Copy the JAR files to the shared volume
-    cp /tmp/jar-source/wiremock-standalone.jar /opt/wiremock/
-    cp /tmp/jar-source/custom-wiremock-transformer.jar /opt/wiremock/
-    chmod 644 /opt/wiremock/*.jar
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Mi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -52,31 +51,15 @@ spec:
         app: wiremock
     spec:
       volumes:
-      - name: jar-source
-        emptyDir: {}
-      - name: wiremock-data
-        emptyDir: {}
+      - name: wiremock-jars
+        persistentVolumeClaim:
+          claimName: wiremock-jars
       - name: stubs-volume
         configMap:
           name: wiremock-stubs
-      - name: init-script
-        configMap:
-          name: wiremock-init-script
-          defaultMode: 0755
-      initContainers:
-      - name: jar-loader
-        image: registry.access.redhat.com/ubi8/ubi:latest
-        command: ["/bin/sh", "/scripts/init.sh"]
-        volumeMounts:
-        - name: jar-source
-          mountPath: /tmp/jar-source
-        - name: wiremock-data
-          mountPath: /opt/wiremock
-        - name: init-script
-          mountPath: /scripts
       containers:
       - name: wiremock
-        image: registry.access.redhat.com/ubi8/openjdk-11:latest
+        image: registry.redhat.io/ubi8/openjdk-11:latest
         command: ["java"]
         args: ["-cp", "/opt/wiremock/wiremock-standalone.jar:/opt/wiremock/custom-wiremock-transformer.jar", "com.github.tomakehurst.wiremock.standalone.WiremockServerRunner", "--extensions", "com.dfs.StringManipulationTransfromer", "--global-response-templating", "--root-dir", "/opt/wiremock/mappings"]
         ports:
@@ -92,10 +75,11 @@ spec:
           httpGet:
             path: /__admin/
             port: 8080
-          initialDelaySeconds: 10
-          periodSeconds: 5
+          initialDelaySeconds: 20
+          periodSeconds: 10
+          timeoutSeconds: 5
         volumeMounts:
-        - name: wiremock-data
+        - name: wiremock-jars
           mountPath: /opt/wiremock
         - name: stubs-volume
           mountPath: /opt/wiremock/mappings
