@@ -1,0 +1,135 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wiremock-stubs
+  labels:
+    app: wiremock
+data:
+  example.json: |
+    {
+      "request": {
+        "method": "GET",
+        "url": "/example"
+      },
+      "response": {
+        "status": 200,
+        "body": "{{request.path.[0]}}",
+        "headers": {
+          "Content-Type": "text/plain"
+        },
+        "transformers": ["response-template", "com.dfs.StringManipulationTransfromer"]
+      }
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wiremock-jars
+  labels:
+    app: wiremock
+  annotations:
+    description: "This will be updated by a script with the base64-encoded JAR files"
+data:
+  # These will be filled with base64-encoded JAR content
+  placeholder: "true"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wiremock
+  labels:
+    app: wiremock
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wiremock
+  template:
+    metadata:
+      labels:
+        app: wiremock
+    spec:
+      volumes:
+      - name: wiremock-data
+        emptyDir: {}
+      - name: stubs-volume
+        configMap:
+          name: wiremock-stubs
+      - name: jar-config
+        configMap:
+          name: wiremock-jars
+      initContainers:
+      - name: copy-jars
+        image: registry.redhat.io/ubi8/ubi:latest
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          mkdir -p /wiremock
+          for file in $(ls /jar-config/); do
+            if [ "$file" != "placeholder" ]; then
+              echo "Processing $file..."
+              base64 -d "/jar-config/$file" > "/wiremock/$file"
+              echo "Created /wiremock/$file"
+              ls -la "/wiremock/$file"
+            fi
+          done
+        volumeMounts:
+        - name: wiremock-data
+          mountPath: /wiremock
+        - name: jar-config
+          mountPath: /jar-config
+      containers:
+      - name: wiremock
+        image: registry.redhat.io/ubi8/openjdk-11:latest
+        command: ["java"]
+        args: ["-jar", "/opt/wiremock/wiremock-standalone.jar", "--extensions", "com.dfs.StringManipulationTransfromer", "--classpath", "/opt/wiremock/custom-wiremock-transformer.jar", "--global-response-templating", "--root-dir", "/opt/wiremock/mappings"]
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "200m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        readinessProbe:
+          httpGet:
+            path: /__admin/
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+        volumeMounts:
+        - name: wiremock-data
+          mountPath: /opt/wiremock
+        - name: stubs-volume
+          mountPath: /opt/wiremock/mappings
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wiremock
+  labels:
+    app: wiremock
+spec:
+  selector:
+    app: wiremock
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http
+  type: ClusterIP
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: wiremock
+  labels:
+    app: wiremock
+spec:
+  to:
+    kind: Service
+    name: wiremock
+  port:
+    targetPort: http 
