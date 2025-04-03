@@ -13,6 +13,8 @@ This guide provides steps to directly deploy WireMock to OpenShift without build
 
 ## Deployment Steps
 
+### STEP 1: Initial Setup
+
 1. **Login to OpenShift**
 
    ```bash
@@ -43,20 +45,52 @@ This guide provides steps to directly deploy WireMock to OpenShift without build
    oc secrets link default redhat-pull-secret --for=pull
    ```
 
-4. **Apply the deployment to create the PVC**
+4. **Verify your JAR files**
+
+   Before proceeding, verify your JAR files:
 
    ```bash
-   # Apply the deployment to create the PVC first
-   oc apply -f direct-wiremock-deployment.yaml
+   # Check that wiremock-standalone.jar contains the WireMockServerRunner class
+   jar tvf wiremock-standalone.jar | grep WireMockServerRunner
    
-   # Wait for the PVC to be bound
-   oc get pvc wiremock-jars
+   # Make sure your custom transformer JAR also exists
+   ls -lh custom-wiremock-transformer.jar
    ```
 
-5. **Create a pod to copy JAR files**
+### STEP 2: Create the PVC and Upload JAR Files
+
+5. **Create only the PVC first**
+
+   Extract just the PVC from the deployment YAML and apply it:
 
    ```bash
-   # Create a helper pod that mounts the same PVC
+   # Create a file for the PVC only
+   cat > wiremock-pvc.yaml << EOF
+   apiVersion: v1
+   kind: PersistentVolumeClaim
+   metadata:
+     name: wiremock-jars
+     labels:
+       app: wiremock
+   spec:
+     accessModes:
+       - ReadWriteOnce
+     resources:
+       requests:
+         storage: 100Mi
+   EOF
+   
+   # Apply just the PVC
+   oc apply -f wiremock-pvc.yaml
+   
+   # Wait for the PVC to be bound
+   oc get pvc wiremock-jars -w
+   ```
+
+6. **Create a pod to copy JAR files to the PVC**
+
+   ```bash
+   # Create a helper pod that mounts the PVC
    oc run jar-uploader --image=registry.redhat.io/ubi8/ubi:latest \
      --overrides='
      {
@@ -89,41 +123,70 @@ This guide provides steps to directly deploy WireMock to OpenShift without build
    oc wait --for=condition=Ready pod/jar-uploader
    ```
 
-6. **Copy JAR files to the PVC**
+7. **Copy JAR files to the PVC**
 
    ```bash
    # Copy JAR files directly to the mounted PVC
    oc cp wiremock-standalone.jar jar-uploader:/opt/wiremock/
    oc cp custom-wiremock-transformer.jar jar-uploader:/opt/wiremock/
    
-   # Verify the files were uploaded correctly
+   # Verify the files were uploaded correctly and check their sizes
    oc exec jar-uploader -- ls -lh /opt/wiremock/
+   
+   # Verify the JAR contents within the pod
+   oc exec jar-uploader -- sh -c "jar tvf /opt/wiremock/wiremock-standalone.jar | grep WireMockServerRunner"
    ```
 
-7. **Delete the helper pod and restart WireMock**
+8. **Cleanup the jar-uploader pod**
 
    ```bash
-   # Delete the helper pod
+   # Delete the helper pod when file upload is confirmed
    oc delete pod jar-uploader
-   
-   # Restart the WireMock pod to make sure it sees the JAR files
-   oc rollout restart deployment/wiremock
+   ```
+
+### STEP 3: Deploy WireMock
+
+9. **Deploy WireMock only after JAR files are in place**
+
+   ```bash
+   # Apply the full deployment (excluding the PVC which is already created)
+   oc apply -f direct-wiremock-deployment.yaml
    
    # Wait for the deployment to be ready
    oc rollout status deployment/wiremock
    ```
 
-8. **Test the deployment**
+10. **Test the deployment**
 
-   ```bash
-   # Get the route URL
-   oc get route wiremock -o jsonpath='{.spec.host}'
-   
-   # Test the example endpoint
-   curl http://$(oc get route wiremock -o jsonpath='{.spec.host}')/example
-   ```
+    ```bash
+    # Get the route URL
+    oc get route wiremock -o jsonpath='{.spec.host}'
+    
+    # Test the example endpoint
+    curl http://$(oc get route wiremock -o jsonpath='{.spec.host}')/example
+    ```
 
 ## How It Works
+
+The deployment process works in three distinct phases:
+
+1. **Setup Phase**
+   - Create the PVC for persistent storage of JAR files
+   - Create a temporary pod to access this PVC
+
+2. **JAR Upload Phase**
+   - Upload JAR files to the PVC using the temporary pod
+   - Verify the files are correctly uploaded
+   - Clean up the temporary pod
+
+3. **Deployment Phase**
+   - Deploy WireMock which mounts the same PVC
+   - WireMock pod can now access the previously uploaded JAR files
+   - WireMock starts using these JAR files
+
+This ensures that the JAR files are available on the persistent volume **before** the WireMock container tries to access them.
+
+## Deployment Components
 
 The deployment configuration (`direct-wiremock-deployment.yaml`) includes:
 
@@ -135,9 +198,10 @@ The deployment configuration (`direct-wiremock-deployment.yaml`) includes:
 
 3. **Deployment**
    - Uses Red Hat UBI 8 OpenJDK 11 container (registry.redhat.io/ubi8/openjdk-11)
+   - Uses `-jar` option to run the WireMock standalone JAR 
+   - Uses `--classpath` option to add custom transformer JAR
    - Mounts the PVC to access the JAR files
    - Mounts the ConfigMap as a volume for stub mappings
-   - Runs WireMock with your custom transformer
 
 4. **Service and Route**
    - Creates a Service to expose WireMock within the cluster
@@ -171,7 +235,7 @@ If the deployment is not working as expected:
    oc logs $(oc get pods -l app=wiremock -o name)
    ```
 
-4. **Verify JAR files exist on the PVC**
+4. **Verify JAR files exist on the PVC and are not corrupted**
 
    ```bash
    # Create a temporary pod to check the PVC contents
@@ -191,7 +255,40 @@ If the deployment is not working as expected:
            {
              "name": "pvc-checker",
              "image": "registry.redhat.io/ubi8/ubi:latest",
-             "command": ["ls", "-lh", "/opt/wiremock"],
+             "command": ["sh", "-c", "ls -lh /opt/wiremock/ && jar tvf /opt/wiremock/wiremock-standalone.jar | grep -i wiremock"],
+             "volumeMounts": [
+               {
+                 "name": "wiremock-jars",
+                 "mountPath": "/opt/wiremock"
+               }
+             ]
+           }
+         ]
+       }
+     }'
+   ```
+
+5. **If the error persists, try running directly with Java**
+
+   ```bash
+   # Create a pod that mounts the PVC to test the Java command directly
+   oc run wiremock-test --image=registry.redhat.io/ubi8/openjdk-11:latest --rm -it \
+     --overrides='
+     {
+       "spec": {
+         "volumes": [
+           {
+             "name": "wiremock-jars",
+             "persistentVolumeClaim": {
+               "claimName": "wiremock-jars"
+             }
+           }
+         ],
+         "containers": [
+           {
+             "name": "wiremock-test",
+             "image": "registry.redhat.io/ubi8/openjdk-11:latest",
+             "command": ["sh", "-c", "cd /opt/wiremock && java -jar wiremock-standalone.jar --help"],
              "volumeMounts": [
                {
                  "name": "wiremock-jars",
